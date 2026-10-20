@@ -1,48 +1,49 @@
-# ai-social-bot
+# Social Post Scheduler
 
-Sticker Mule bots get millions of impressions. This clone: Auto-reply with images (uses Trace Clone API), Auto-generate memes, Scheduled posts, Analytics dashboard.
+[![CI](https://github.com/tommyshamamba/ai-social-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/tommyshamamba/ai-social-bot/actions/workflows/ci.yml)
 
-**2.5M+ impressions · 12.4k replies · 8.4% engagement**
+A FastAPI service that drafts short social posts from templates, schedules them, and publishes
+due posts through a pluggable publisher interface.
 
-Tommy Shamamba — 9+ years (2017-2026) — **FLEXIBILITY true**.
+> Portfolio project. The default publisher records posts in memory. No social-network API is
+> called, and no audience or engagement figures are claimed.
 
-Proves AI that does work not demos — Agents inference evals tooling that cuts cost or headcount.
+## What it does
 
-## Stack
+- `POST /drafts` fills a template such as `"Shipping {feature} today"` and enforces the 280-character limit.
+- `POST /posts` schedules text for a UTC time. `GET /posts` lists posts in time order, and `DELETE /posts/{id}` cancels one.
+- `POST /posts/run-due` publishes every post that is due. A publisher error marks that post `failed`
+  with the reason and the rest of the batch continues.
+- `GET /stats` counts posts per status. `GET /healthz` is the liveness check.
 
-Node.js Python X API Image gen Auto-reply
+## Architecture
 
-## Metrics
+```
+FastAPI ─► Scheduler (thread-safe store, due-post selection, failure isolation)
+                 └─► Publisher protocol ─► MemoryPublisher (default) | real API adapter (not included)
+```
 
-- 7M+ users
-- 5M events/day
-- 99.99% uptime
-- latency -35%
-- MTTR -45%
-- FLEXIBILITY true
+To connect a real network, implement `publish(text)` and pass it to `Scheduler`. A cron job or
+worker can call `run-due` on an interval.
 
 ## Run
 
-```bash
-pip install fastapi uvicorn
-uvicorn src.bot:app --host 0.0.0.0 --port 8003
+```sh
+pip install -r requirements.txt
+uvicorn src.bot:app --reload             # http://localhost:8000/docs
+docker build -t post-scheduler . && docker run -p 8000:8000 post-scheduler
 ```
 
-- http://localhost:8003/health
-- http://localhost:8003/docs
-- http://localhost:8003/dashboard
+## Tests
 
-## Push
-
-```bash
-git init
-git add .
-git commit -m "AI Social Bot Senior 9+ years FLEXIBILITY X API Image Gen Auto-reply Memes Scheduled Analytics 2.5M+ impressions"
-git branch -M main
-git remote add origin https://github.com/tommyshamamba/ai-social-bot.git
-git push -u origin main
+```sh
+pip install -r requirements.txt -r requirements-dev.txt
+ruff check . && pytest -q
 ```
 
-## Contact
+The tests cover template rendering, due-time selection, publisher-failure isolation, cancellation
+and validation. GitHub Actions runs lint, tests and a Docker build on every push.
 
-shamambatommy@gmail.com | 817-448-4871 | Fort Worth TX CST
+## License
+
+MIT

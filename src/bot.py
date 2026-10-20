@@ -1,152 +1,158 @@
-"""
-AI Social Bot — X Bot Clone — Millions Impressions.
+"""Social post scheduler.
 
-Tommy Shamamba — 9+ years (2017-2026) — FLEXIBILITY true.
-7M+ users, 5M/day, 99.99%, AI that does work not demos Agents inference evals tooling,
-Trace API remove bg + generate meme, Creator tools, Internal bots Automation,
-Monitoring Datadog MTTR -45%.
+A FastAPI service for drafting short social posts from templates, scheduling them, and
+publishing due posts through a pluggable publisher. The default publisher only records
+posts in memory; no social-network API is called.
 """
 
 from __future__ import annotations
 
-import random
-import time
-from typing import Any
+import threading
+import uuid
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Protocol
 
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Response
+from pydantic import BaseModel, Field
 
-app = FastAPI(title="AI Social Bot — X Clone — 9+ years FLEXIBILITY")
+MAX_LEN = 280
 
 
-class TweetRequest(BaseModel):
+class Status(str, Enum):
+    scheduled = "scheduled"
+    published = "published"
+    failed = "failed"
+
+
+class Post(BaseModel):
+    id: str
     text: str
-    with_image: bool = True
-    flexibility: bool = True
+    publish_at: datetime
+    status: Status = Status.scheduled
+    published_at: datetime | None = None
+    error: str | None = None
 
 
-class XBot:
+class SchedulePost(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_LEN)
+    publish_at: datetime
+
+
+class DraftRequest(BaseModel):
+    template: str = Field(min_length=1)
+    values: dict[str, str] = Field(default_factory=dict)
+
+
+class Publisher(Protocol):
+    def publish(self, text: str) -> None: ...
+
+
+class MemoryPublisher:
     def __init__(self) -> None:
-        self.impressions = 2_500_000
-        self.flexibility = True
-        print("X Bot initialized FLEXIBILITY 9+ years Tommy Millions impressions")
+        self.sent: list[str] = []
 
-    def auto_reply_with_image(self, mention_text: str) -> dict[str, Any]:
-        # AI that does work not demos Agents inference evals tooling that cuts cost
-        # use Trace API to remove background + generate meme
-        meme_templates = [
-            "FLEXIBILITY — 9+ years — Sticker Mule",
-            "7M+ users 5M events/day 99.99% Built for scale",
-            "Latency -35% p95 120->72ms Redis caching FLEXIBILITY",
-            "MTTR -45% Datadog Inference -40%/-30% 1M+ images/day",
-        ]
-        reply = f"{random.choice(meme_templates)} — Replying to {mention_text[:50]}"
-        return {
-            "reply": reply,
-            "image_generated": True,
-            "image_url": f"/memes/{random.randint(1000, 9999)}.png",
-            "model": "U²Net + Meme Gen 1M+/day pattern",
-            "flexibility": True,
-            "impressions": self.impressions,
-        }
-
-    def auto_generate_meme(self, topic: str) -> dict[str, Any]:
-        # Auto-generate memes Image generation Creator tools
-        return {
-            "topic": topic,
-            "meme_text": f"{topic} — FLEXIBILITY — 9+ years Tommy Shamamba — 7M+ users 5M/day",
-            "image_url": f"/memes/meme_{int(time.time())}.png",
-            "scheduled": False,
-            "flexibility": True,
-        }
-
-    def scheduled_posts(self) -> list[dict[str, Any]]:
-        return [
-            {
-                "time": "09:00 CST",
-                "text": "FLEXIBILITY Single codebase web+mobile 9+ years 7M+ users",
-                "image": True,
-            },
-            {
-                "time": "12:00 CST",
-                "text": "Trace Clone U²Net ONNX 1M+ images/day latency -35% FLEXIBILITY",
-                "image": True,
-            },
-            {
-                "time": "15:00 CST",
-                "text": "Stores Platform Next.js Stripe Creator marketplace 99.99% FLEXIBILITY",
-                "image": False,
-            },
-        ]
-
-    def analytics_dashboard(self) -> dict[str, Any]:
-        return {
-            "total_impressions": 2_500_000,
-            "total_replies": 12400,
-            "memes_generated": 3400,
-            "scheduled_posts_sent": 890,
-            "engagement_rate": "8.4%",
-            "uptime": "99.99%",
-            "flexibility": True,
-            "years": "9+",
-            "metrics": "latency -35% MTTR -45% 1M+ images/day inference -40%/-30%",
-        }
+    def publish(self, text: str) -> None:
+        self.sent.append(text)
 
 
-bot = XBot()
+def render(template: str, values: dict[str, str]) -> str:
+    """Fill {placeholders}; raise ValueError on a missing value or an over-long result."""
+    try:
+        text = template.format(**values)
+    except KeyError as exc:
+        raise ValueError(f"missing value for {exc.args[0]}") from exc
+    if len(text) > MAX_LEN:
+        raise ValueError(f"rendered text is {len(text)} characters; limit is {MAX_LEN}")
+    return text
 
 
-@app.get("/health")
-def health() -> dict[str, Any]:
-    return {
-        "status": "ok",
-        "service": "ai-social-bot",
-        "impressions": "2.5M+",
-        "uptime": "99.99%",
-        "flexibility": True,
-        "years": "9+",
-        "stack": "Python Node.js X API Image gen Auto-reply Auto memes Scheduled Analytics",
-        "engineer": "Tommy Shamamba",
-    }
+class Scheduler:
+    def __init__(self, publisher: Publisher) -> None:
+        self.publisher = publisher
+        self._posts: dict[str, Post] = {}
+        self._lock = threading.Lock()
+
+    def schedule(self, req: SchedulePost) -> Post:
+        at = req.publish_at if req.publish_at.tzinfo else req.publish_at.replace(tzinfo=timezone.utc)
+        post = Post(id=str(uuid.uuid4()), text=req.text, publish_at=at)
+        with self._lock:
+            self._posts[post.id] = post
+        return post
+
+    def posts(self) -> list[Post]:
+        with self._lock:
+            return sorted(self._posts.values(), key=lambda p: p.publish_at)
+
+    def cancel(self, post_id: str) -> bool:
+        with self._lock:
+            post = self._posts.get(post_id)
+            if post is None or post.status != Status.scheduled:
+                return False
+            del self._posts[post_id]
+            return True
+
+    def run_due(self, now: datetime | None = None) -> list[Post]:
+        """Publish every scheduled post whose time has come. Failures are recorded, not raised."""
+        now = now or datetime.now(timezone.utc)
+        done: list[Post] = []
+        for post in self.posts():
+            if post.status != Status.scheduled or post.publish_at > now:
+                continue
+            try:
+                self.publisher.publish(post.text)
+                post.status, post.published_at = Status.published, now
+            except Exception as exc:  # publisher errors must not stop the batch
+                post.status, post.error = Status.failed, str(exc)
+            done.append(post)
+        return done
+
+    def stats(self) -> dict[str, int]:
+        counts = {s.value: 0 for s in Status}
+        for post in self.posts():
+            counts[post.status.value] += 1
+        return counts
 
 
-@app.post("/api/reply")
-def reply(req: TweetRequest) -> dict[str, Any]:
-    return bot.auto_reply_with_image(req.text)
+scheduler = Scheduler(MemoryPublisher())
+app = FastAPI(title="Social post scheduler", version="1.0.0")
 
 
-@app.post("/api/meme")
-def meme(topic: str = "Sticker Mule") -> dict[str, Any]:
-    return bot.auto_generate_meme(topic)
+@app.get("/healthz")
+def healthz() -> dict[str, str]:
+    return {"status": "ok"}
 
 
-@app.get("/api/scheduled")
-def scheduled() -> dict[str, Any]:
-    return {
-        "posts": bot.scheduled_posts(),
-        "automation": True,
-        "flexibility": True,
-    }
+@app.post("/drafts")
+def draft(req: DraftRequest) -> dict[str, str]:
+    try:
+        return {"text": render(req.template, req.values)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@app.get("/api/analytics")
-def analytics() -> dict[str, Any]:
-    return bot.analytics_dashboard()
+@app.post("/posts", status_code=201)
+def schedule(req: SchedulePost) -> Post:
+    return scheduler.schedule(req)
 
 
-@app.get("/dashboard")
-def dashboard() -> dict[str, Any]:
-    return {
-        "bot": "AI Social Bot X Bot Clone Millions impressions",
-        "features": [
-            "Auto-reply with images",
-            "Auto-generate memes",
-            "Scheduled posts",
-            "Analytics dashboard",
-        ],
-        "impressions": "2.5M+",
-        "stack": "Node.js Python X API Image generation Auto-reply",
-        "pattern": "7M+ users",
-        "flexibility": True,
-        "years": "9+",
-    }
+@app.get("/posts")
+def list_posts() -> list[Post]:
+    return scheduler.posts()
+
+
+@app.delete("/posts/{post_id}", status_code=204, response_class=Response)
+def cancel(post_id: str) -> Response:
+    if not scheduler.cancel(post_id):
+        raise HTTPException(status_code=404, detail="no scheduled post with that id")
+    return Response(status_code=204)
+
+
+@app.post("/posts/run-due")
+def run_due() -> list[Post]:
+    return scheduler.run_due()
+
+
+@app.get("/stats")
+def stats() -> dict[str, int]:
+    return scheduler.stats()
