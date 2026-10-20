@@ -1,6 +1,6 @@
 # Social Post Scheduler
 
-[![CI](https://github.com/tommyshamamba/ai-social-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/tommyshamamba/ai-social-bot/actions/workflows/ci.yml)
+[![CI](https://github.com/tommyshamamba/social-post-scheduler/actions/workflows/ci.yml/badge.svg)](https://github.com/tommyshamamba/social-post-scheduler/actions/workflows/ci.yml)
 
 A FastAPI service that drafts short social posts from templates, schedules them, and publishes
 due posts through a pluggable publisher interface.
